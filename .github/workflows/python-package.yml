@@ -1,0 +1,52 @@
+name: Make release
+
+on:
+  push:
+    branches: [ "master" ]
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      UV_SYSTEM_PYTHON: 1
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        version: "0.9.28"
+    - name: Install dependencies
+      run: |
+        uv sync --locked --all-extras --dev
+    - name: Critical linting with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        uvx flake8 src/ --count --select=E1,E9,F63,F7,F82 --show-source --statistics
+    # No tests for now
+    # - name: Test with pytest
+    #   run: |
+    #     pytest
+    - name: Build package
+      run: uv build
+    - name: Draft Release
+      uses: softprops/action-gh-release@v2.5.0
+      with:
+        draft: true
+        make_latest: true
+        generate_release_notes: true
+        fail_on_unmatched_files: true
+        files: dist/auto_cards*
+    

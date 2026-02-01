@@ -1,0 +1,37 @@
+name: Python code checkup
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Install dependencies
+      run: |
+        uv sync --locked --all-extras --dev
+        uv pip install flake8
+        uv pip install pylint
+        uv pip install bandit
+    - name: Analysing the code with pylint
+      continue-on-error: true
+      run: |
+        uv run pylint $(git ls-files '*.py')
+    - name: Analysing the code with flak8
+      continue-on-error: true
+      run: |
+        uv run flake8 $(git ls-files '*.py')
+    - name: Analysing the code with bandit
+      continue-on-error: true
+      run: |
+        uv run bandit $(git ls-files '*.py')
+
