@@ -1,15 +1,18 @@
 import argparse
 import csv
-from collections import namedtuple
+from typing import Mapping
 
-import ollama
-import wn
-import wn.constants
-from tqdm import tqdm
+import httpx
+from rich.console import Console
+from rich.progress import track
 
-OllamaConfig = namedtuple("OllamaConfig", ("host", "model", "client"))
+from .abc_definition_source import AbstractDefinitionSrc, ConfigOption, prepare_config_data
+from .args_parser import ConfigDataRaw, ConfigPluginAction, RichArgumentParser, SourcesAction
+from .ollama_src import OllamaSrc
+from .wordnet_src import WordNetSrc
 
-parser = argparse.ArgumentParser(description="Finds defintion for a word list")
+console = Console()
+parser = RichArgumentParser(console, description="Finds defintion for a word list")
 parser.add_argument(
     "input",
     help="CSV file with one (word) or two columns (word, part of speech)",
@@ -29,133 +32,87 @@ parser.add_argument(
 )
 parser.add_argument("--output-quotechar", help="CSV quotechar for `input`", default='"')
 parser.add_argument(
-    "-l", "--wordnet-lexicon", help="Which wordnet lexicon to use", default="oewn:2024"
+    "--config",
+    action=ConfigPluginAction,
+    help="Sepcifies config values for any source. Expected format {source name/id}.{value name/id}={value}",
+    dest="config_params",
 )
 parser.add_argument(
     "-s",
-    "--ollama-server",
-    help="Url of ollama server",
-    default="http://localhost:11434",
-)
-parser.add_argument(
-    "-m", "--ollama-model", help="Which local AI model to use", default="gemma3:4b"
-)
-parser.add_argument(
-    "--ollama",
-    help="Use AI (ollama) if wordnet does not have defintion",
-    action="store_true",
+    "--sources",
+    action=SourcesAction,
+    help="Define what sources and in what order to use",
 )
 
-# Recoginsed POS
-POS_TRANSLATION = {
-    "v": wn.constants.VERB,
-    "V": wn.constants.VERB,
-    "n": wn.constants.NOUN,
-    "N": wn.constants.NOUN,
-    "adv": wn.constants.ADVERB,
-    "adj": wn.constants.ADJECTIVE,
-    "phrase": wn.constants.PHRASE,
-}
+SOURCES: dict = {OllamaSrc.name: OllamaSrc, WordNetSrc.name: WordNetSrc}
+DEFAULT_SRCS = [WordNetSrc.name]
 
 
-def download_lexicon(name: str):
-    lexicons = [lexicon.id for lexicon in wn.lexicons()] + [
-        f"{lexicon.id}:{lexicon.version}" for lexicon in wn.lexicons()
-    ]
-    if not name in lexicons:
-        print(f"[INFO] Lexicon {name} not found. Downloading...")
-        p = wn.download(name)
-        print(f"[INFO] Lexicon {name} downloaded to: {p}")
+def validate_config(config: ConfigDataRaw, used_sources: list[str]):
+    for source, vals in config.items():
+        if source.lower() not in SOURCES:
+            console.print(
+                f"[dark_orange][bold]WARNING[/bold] Config value for unknown source: {source}"
+            )
+            continue
+        if source.lower() not in used_sources:
+            console.print(
+                f"[dark_orange][bold]WARNING[/bold] Config value for unused source: {source}"
+            )
+            continue
+
+        config_info: Mapping[str, ConfigOption] = SOURCES[source.lower()].config_values
+
+        for name, _val in vals.items():
+            if name.lower() not in config_info.keys():
+                parser.error(f"Invalid config option: {source}.{name}")
+
+            # config_option = config_info[name.lower()]
+            # TODO: Verify config_option.cli_type
 
 
-def wordnet_lookup(word: str, pos: None | str, wn: wn.Wordnet) -> str | None:
-    final_pos = POS_TRANSLATION.get(pos, None) if pos is not None else None
-    synsets = wn.synsets(word, pos=final_pos)
+def prepare_sources(used_sources: list[str], config: ConfigDataRaw) -> list[AbstractDefinitionSrc]:
+    prepared_sources = []
+    session = httpx.Client()
 
-    if synsets is None or len(synsets) == 0:
-        return None
-    return synsets[0].definition()
+    for src in used_sources:
+        src_class = SOURCES[src.lower()]
+        config_data = prepare_config_data(src_class.config_values)
+        config_data.update(config.get(src_class.name, {}))
 
+        source: AbstractDefinitionSrc = src_class(console, session)
+        if not source.setup(config_data):
+            parser.error(f"Failed to configure {source.name}! Got this error message: [italic]{source.error_msg}[/italic]")
 
-SYSTEM_MESSAGE = """You task is to provide a definition to a word or idiom. The user will provide you with the word. Sometimes requests will also include part of speech e.g.:
-- adj -> adjective
-- adv -> adverb
-- V -> verb
-- n -> noun
-- idiom
-- phr. v -> phrasal verb
-The part of speech will usually be separated from the word with comma or semicolon.
-There may be situations where user provides corrupted or invalid or does not provide part of speech at all. In such case try to guess what part of speech is the expression provided.
-You shall not respond with anything else that the definition.
-Good example of reponses are:
+        prepared_sources.append(source)
 
-1.
-  User: glue, V
-  Assistant: fasten or join with or as if with glue
-2. 
-  User: Beer gut
-  Assistant: A prominent, protruding belly caused by excessive consumption of beer.
-3.
-  User: Pull the woll over someone; idiom
-  Assistant: To deceive or fool someone.
-"""
-
-
-def ollama_lookup(
-    word: str, pos: None | str, ollama_config: OllamaConfig
-) -> str | None:
-    try:
-        pos_str = "" if pos is None else f"; {pos}"
-        resp = ollama_config.client.chat(
-            model=ollama_config.model,
-            messages=[
-                {"role": "system", "content": SYSTEM_MESSAGE},
-                {"role": "user", "content": word + pos_str},
-            ],
-            stream=False,
-        )
-    except ConnectionError:
-        print("[ERROR] Failed to connect to ollama server!")
-        return None
-    except ollama.ResponseError:
-        print("[ERROR] Invalid reponse from ollama server!")
-        return None
-    except ollama.RequestError:
-        print("[ERROR] Invalid request was sent!")
-        return None
-
-    return resp["message"]["content"]
-
-
-def find_definition(
-    word: str, pos: None | str, wn: wn.Wordnet, ollama_config: OllamaConfig
-) -> str | None:
-    wd = wordnet_lookup(word, pos, wn)
-    if wd is not None:
-        return wd
-
-    if ollama_config.client is not None:
-        return ollama_lookup(word, pos, ollama_config)
-
-    return None
-
+    return prepared_sources
 
 def main():
     args = parser.parse_args()
+    console.print(args)
 
-    download_lexicon(args.wordnet_lexicon)
-    wordnet = wn.Wordnet(args.wordnet_lexicon)
+    # Validate sources
+    sources = args.sources or DEFAULT_SRCS
+    if not all((src in SOURCES for src in sources)):
+        invalid_srcs = tuple(filter(lambda src: src not in SOURCES, sources))
+        parser.error(
+            f"Invalid source{'s' if len(invalid_srcs) > 1 else ''}: {', '.join(invalid_srcs)}"
+        )
 
-    ollama_client = None
-    if args.ollama:
-        ollama_client = ollama.Client(args.ollama_server)
-    ollama_config = OllamaConfig(args.ollama_server, args.ollama_model, ollama_client)
+    validate_config(args.config_params, sources)
+
+    sources = prepare_sources(sources, args.config_params)
+    console.print("[green]Sources successfully configured!")
+    console.print("Sources will be used in the following order:")
+    for nr, src in enumerate(sources):
+        console.print(f"    {nr+1}. {src.name}")
 
     found = 0
     failed = 0
     with args.input, args.output:
         reader = csv.reader(
-            tqdm(args.input),
+            track(args.input, console=console),
             delimiter=args.input_delimiter,
             quotechar=args.input_quotechar,
         )
@@ -165,21 +122,28 @@ def main():
             quotechar=args.output_quotechar,
         )
         for line in reader:
-            if len(line) > 1:
-                defi = find_definition(line[0], line[1], wordnet, ollama_config)
-            else:
-                defi = find_definition(line[0], None, wordnet, ollama_config)
+            defi = []
+            for source in sources:
+                if len(line) > 1:
+                    defi = source.find_definition(line[0], line[1])
+                else:
+                    defi = source.find_definition(line[0], None)
 
-            if defi is None:
-                print("[WARNING] Failed to find definition for:", line[0])
+                if len(defi) > 0:
+                    break
+                
+
+            if len(defi) == 0:
+                console.print(f"[dark_orange]WARNING Failed to find definition for: [italic]{line[0]}[/italic]")
                 failed += 1
                 continue
-            writer.writerow((line[0], defi))
+            writer.writerow((line[0], defi[0]))
             found += 1
-    print(
-        f"[INFO] Found {found} definition. {failed} word{' do ' if failed == 1 else 's does'} not have defintion."
+    console.print(
+        f"[blue][INFO] [green]Found {found} definition.[/green] [red]{failed} word{' do ' if failed == 1 else 's does'} not have defintion."
     )
 
+    for src in sources:
+        if not src.cleanup():
+            console.print(f"[dark_orange]WARNING {src.name} failed to cleanup! Got this error message: [italic]{src.error_msg}[/italic]")
 
-if __name__ == "__main__":
-    main()
