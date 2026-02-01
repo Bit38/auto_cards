@@ -1,46 +1,89 @@
-# Auto cards
-Simple cli tool for composing English flashcards (word -> definition).
+
+# auto_cards
+
+Simple cli tool for composing flashcards. Finds definition to a list of words.
+
+
+
 
 ## Installation
-1. Clone this git repo
+
+Recommended installation method is through [pip](https://pip.pypa.io/en/stable/)
+
 ```bash
-git clone https://github.com/Bit38/auto_cards.git
-```
-2. Run with uv 
-```bash
-uv run src/auto_cards.py
+  pip install git+https://github.com/Bit38/auto_cards.git
 ```
 
-## Usage 
+After installing just use:
 ```bash
-usage: auto_cards.py [-h] [-d INPUT_DELIMITER] [-q INPUT_QUOTECHAR] [--output-delimeter OUTPUT_DELIMETER] [--output-quotechar OUTPUT_QUOTECHAR] [-l WORDNET_LEXICON] [-s OLLAMA_SERVER]
-               [-m OLLAMA_MODEL] [--ollama]
-               input output
+auto_cards
+```
+
+Alternatively, you can use [uv][https://docs.astral.sh/uv/]:
+```bash
+uvx --from git+https://github.com/Bit38/auto_cards.git auto_cards
+```
+    
+## Usage
+
+```bash
+Usage: auto_cards [-h] [-d INPUT_DELIMITER] [-q INPUT_QUOTECHAR]
+                  [--output-delimeter OUTPUT_DELIMETER]
+                  [--output-quotechar OUTPUT_QUOTECHAR] [--config CONFIG_PARAMS]
+                  [-s SOURCES]
+                  input output
 
 Finds defintion for a word list
 
-positional arguments:
+Positional Arguments:
   input                 CSV file with one (word) or two columns (word, part of speech)
   output                Output csv file with flashcards
 
-options:
+Options:
   -h, --help            show this help message and exit
-  -d INPUT_DELIMITER, --input-delimiter INPUT_DELIMITER
+  -d, --input-delimiter INPUT_DELIMITER
                         CSV delimiter for `input`
-  -q INPUT_QUOTECHAR, --input-quotechar INPUT_QUOTECHAR
+  -q, --input-quotechar INPUT_QUOTECHAR
                         CSV quotechar for `input`
   --output-delimeter OUTPUT_DELIMETER
                         CSV delimeter for `output`
   --output-quotechar OUTPUT_QUOTECHAR
                         CSV quotechar for `input`
-  -l WORDNET_LEXICON, --wordnet-lexicon WORDNET_LEXICON
-                        Which wordnet lexicon to use
-  -s OLLAMA_SERVER, --ollama-server OLLAMA_SERVER
-                        Url of ollama server
-  -m OLLAMA_MODEL, --ollama-model OLLAMA_MODEL
-                        Which local AI model to use
-  --ollama              Use AI (ollama) if wordnet does not have defintion
+  --config CONFIG_PARAMS
+                        Sepcifies config values for any source. Expected format {source
+                        name/id}.{value name/id}={value}
+  -s, --sources SOURCES
+                        Define what sources and in what order to use (by default "wordnet")
+```
+
+The script requires a CSV file with one or two columns. The first column (mandatory) should contain the word or expression to be defined, while the second column (optional) specifies the part of speech. 
+
+For now following sources and config values are supported:
+* `wordnet` - uses wordnet for looking up definitions
+    * `wordnet.lexicon` - what lexicon to use. Should be either a *url* or [*id*](https://github.com/goodmami/wn#available-wordnets). By default: `oewn:2024` (Open English Wordnet)
+    * `wordnet.default_pos` - what part of speech should be used if one is not provided
+* `ollama` - uses local AI to *generate* definitions
+    * `ollama.server` - url to ollama server (default: `http://localhost:11434`)
+    * `ollama.model` - what ai model to use (default: `gemma3:4b`)
+
+### Sample input files
+```csv
+serendipity
+break a leg
+ephemeral
+cold shoulder
+```
+
+```csv
+bark,noun
+bark,verb
+fast,adjective
+fast,adverb
+set,verb
 ```
 
 ## License
-This project is licensed under [MIT License](./LICENSE)
+
+This project is licensed under [MIT](./LICENSE)
+
+

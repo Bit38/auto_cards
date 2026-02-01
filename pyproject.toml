@@ -11,3 +11,11 @@ dependencies = [
     "rich-argparse>=1.7.2",
     "wn>=0.14.0",
 ]
+license-files = ["LICENSE"]
+
+[project.scripts]
+auto_cards = "auto_cards.__main__:main"
+
+[build-system]
+requires = ["uv_build >= 0.9.26, <0.10.0"]
+build-backend = "uv_build"
