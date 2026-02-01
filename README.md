@@ -19,7 +19,7 @@ After installing just use:
 auto_cards
 ```
 
-Alternatively, you can use [uv][https://docs.astral.sh/uv/]:
+Alternatively, you can use [uv](https://docs.astral.sh/uv/):
 ```bash
 uvx --from git+https://github.com/Bit38/auto_cards.git auto_cards
 ```
